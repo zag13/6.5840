@@ -1,0 +1,15 @@
+version: "3.8"
+
+name: 6-5840
+
+services:
+  server:
+    image: golang:1.21
+    container_name: 6-5840_dev
+    hostname: 6-5840_dev
+    environment:
+      - GO_ENV=development
+    volumes:
+      - ./src:/app
+    working_dir: /app
+    command: tail -f /dev/null
