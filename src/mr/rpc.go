@@ -16,13 +16,11 @@ const (
 	WORKER_TYPE_REDUCE WorkerType = "reduce"
 )
 
-// Add your RPC definitions here.
-type JobArgs struct {
-}
+type JobArgs struct{}
 type JobReply struct {
 	WorkerType WorkerType
-	Id         int
 	File       string
+	Id         int
 	NReduce    int
 }
 
@@ -30,8 +28,7 @@ type ReportArgs struct {
 	WorkerType WorkerType
 	File       string
 }
-type ReportReply struct {
-}
+type ReportReply struct{}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.

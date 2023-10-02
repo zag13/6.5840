@@ -19,6 +19,8 @@ const (
 	STATUS_FAIL Status = "fail"
 )
 
+var ErrJobNotReady = fmt.Errorf("job not ready")
+
 type Coordinator struct {
 	lock sync.Mutex
 	Jobs []Job
@@ -51,7 +53,7 @@ func (c *Coordinator) Job(args *JobArgs, reply *JobReply) error {
 	}
 	for _, j := range c.Jobs {
 		if j.status != STATUS_DONE {
-			return fmt.Errorf("map job on going")
+			return ErrJobNotReady
 		}
 	}
 	for i, o := range c.Outs {
@@ -103,7 +105,6 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	// Your code here.
 	for _, j := range c.Jobs {
 		if j.status != STATUS_DONE {
 			return false
