@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env ../../venv/bin/python3
 import sys
 import shutil
 from typing import Optional, List, Tuple, Dict
