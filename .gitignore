@@ -4,5 +4,6 @@ api.key
 *-handin.tar.gz
 
 .idea
-**/.DS_Store
 venv/
+**/.DS_Store
+*.prof
