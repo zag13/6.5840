@@ -362,7 +362,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 
 		rf.log = append(rf.log, args.Entries...)
-		l = rf.lastIncludedIndex + len(rf.log)
 		rf.persist()
 		Debug(dLog, "S%d append entries %d L%d", rf.me, len(args.Entries), len(rf.log))
 	}
@@ -427,10 +426,6 @@ func (rf *Raft) handleAppendEntriesResponse(server int, args *AppendEntriesArgs,
 		rf.persist()
 	} else {
 		if reply.Success {
-			if len(args.Entries) == 0 {
-				return
-			}
-
 			rf.nextIndex[server] = max(args.PrevLogIndex+len(args.Entries)+1, rf.nextIndex[server])
 			rf.matchIndex[server] = max(args.PrevLogIndex+len(args.Entries), rf.matchIndex[server])
 
