@@ -44,11 +44,11 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	db                   map[string]string // key-value database
-	applyCond            *sync.Cond
-	lastAppliedIndex     int                         // last applied index
-	lastAppliedTerm      int                         // last applied term
-	clientLatestRequests map[int64]map[int64]Request // latest client requests
+	db                map[string]string // key-value database
+	applyCond         *sync.Cond
+	lastAppliedIndex  int               // last applied index
+	lastAppliedTerm   int               // last applied term
+	clientLastRequest map[int64]Request // client last requests
 }
 
 type Request struct {
@@ -64,10 +64,10 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	}
 
 	kv.applyCond.L.Lock()
-	req, ok := kv.clientLatestRequests[args.ClientId][args.RequestId]
+	req, ok := kv.clientLastRequest[args.ClientId]
 	kv.applyCond.L.Unlock()
 
-	if ok {
+	if ok && req.RequestId == args.RequestId {
 		reply.Err = OK
 		reply.Value = req.Value
 		return
@@ -97,9 +97,8 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.applyCond.L.Lock()
 	defer kv.applyCond.L.Unlock()
 
-	req = kv.clientLatestRequests[args.ClientId][args.RequestId]
 	reply.Err = OK
-	reply.Value = req.Value
+	reply.Value = kv.db[args.Key]
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -110,10 +109,10 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 
 	kv.applyCond.L.Lock()
-	_, ok := kv.clientLatestRequests[args.ClientId][args.RequestId]
+	req, ok := kv.clientLastRequest[args.ClientId]
 	kv.applyCond.L.Unlock()
 
-	if ok {
+	if ok && req.RequestId == args.RequestId {
 		reply.Err = OK
 		return
 	}
@@ -198,7 +197,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.applyCond = sync.NewCond(&kv.mu)
 	kv.lastAppliedIndex = 0
 	kv.lastAppliedTerm = 0
-	kv.clientLatestRequests = make(map[int64]map[int64]Request)
+	kv.clientLastRequest = make(map[int64]Request)
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
@@ -215,10 +214,8 @@ func (kv *KVServer) applyListener() {
 		kv.applyCond.L.Lock()
 		if msg.CommandValid && msg.CommandIndex > kv.lastAppliedIndex {
 			op := msg.Command.(Op)
-			if _, ok := kv.clientLatestRequests[op.ClientId]; !ok {
-				kv.clientLatestRequests[op.ClientId] = make(map[int64]Request)
-			}
-			if _, ok := kv.clientLatestRequests[op.ClientId][op.RequestId]; !ok {
+			req, ok := kv.clientLastRequest[op.ClientId]
+			if !(ok && req.RequestId == op.RequestId) {
 				request := Request{}
 				switch op.Type {
 				case "Get":
@@ -239,7 +236,7 @@ func (kv *KVServer) applyListener() {
 						Value:     "",
 					}
 				}
-				kv.clientLatestRequests[op.ClientId][op.RequestId] = request
+				kv.clientLastRequest[op.ClientId] = request
 			}
 
 			kv.lastAppliedIndex = msg.CommandIndex
