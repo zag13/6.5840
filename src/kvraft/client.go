@@ -1,10 +1,11 @@
 package kvraft
 
 import (
-	"6.5840/labrpc"
 	"crypto/rand"
 	"math/big"
 	"time"
+
+	"6.5840/labrpc"
 )
 
 type Clerk struct {
@@ -63,28 +64,33 @@ func (ck *Clerk) Get(key string) string {
 
 		for _, serverId := range serversToTry {
 			reply := GetReply{}
-			ok := ck.servers[serverId].Call("KVServer.Get", &args, &reply)
-			if !ok {
-				continue
-			}
-			switch reply.Err {
-			case OK:
-				ck.leaderId = serverId
-				// DPrintf("Get: key %v, value %v", key, reply.Value)
-				return reply.Value
-			case ErrNoKey:
-				ck.leaderId = serverId
-				// DPrintf("Get: key %v does not exist", key)
-				return ""
-			case ErrWrongLeader:
-				// DPrintf("Get: wrong leader %v", serverId)
-			default:
-				// DPrintf("Get: unexpected error %v", reply.Err)
+			done := make(chan bool)
+			go func(serverId int) {
+				// DPrintf("Request Get: serverId %v, args %v, ", serverId, args)
+				done <- ck.servers[serverId].Call("KVServer.Get", &args, &reply)
+				// DPrintf("Request Get: serverId %v, args %v, reply %v", serverId, args, reply.Err)
+			}(serverId)
+
+			select {
+			case ok := <-done:
+				if !ok {
+					continue
+				}
+				switch reply.Err {
+				case OK:
+					ck.leaderId = serverId
+					return reply.Value
+				case ErrNoKey:
+					ck.leaderId = serverId
+					return ""
+				case ErrWrongLeader:
+					ck.leaderId = -1
+				default:
+				}
+			case <-time.After(RequestTimeout):
+				// DPrintf("Request Get: serverId %v, args %v, timeout", serverId, args)
 			}
 		}
-
-		time.Sleep(100 * time.Millisecond)
-		ck.leaderId = -1
 	}
 }
 
@@ -117,25 +123,30 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 
 		for _, serverId := range serversToTry {
 			reply := PutAppendReply{}
-			ok := ck.servers[serverId].Call("KVServer.PutAppend", &args, &reply)
-			// DPrintf("PutAppend: serverId %v, ok %v, args %v, reply %v", serverId, ok, args, reply)
-			if !ok {
-				continue
-			}
-			switch reply.Err {
-			case OK:
-				ck.leaderId = serverId
-				// DPrintf("PutAppend: key %v, value %v", key, value)
-				return
-			case ErrWrongLeader:
-				// DPrintf("PutAppend: wrong leader %v", serverId)
-			default:
-				// DPrintf("PutAppend: unexpected error %v", reply.Err)
+			done := make(chan bool)
+			go func(serverId int) {
+				// DPrintf("Request PutAppend: serverId %v, args %v, ", serverId, args)
+				done <- ck.servers[serverId].Call("KVServer.PutAppend", &args, &reply)
+				// DPrintf("Request PutAppend: serverId %v, args %v, reply %v", serverId, args, reply.Err)
+			}(serverId)
+
+			select {
+			case ok := <-done:
+				if !ok {
+					continue
+				}
+				switch reply.Err {
+				case OK:
+					ck.leaderId = serverId
+					return
+				case ErrWrongLeader:
+					ck.leaderId = -1
+				default:
+				}
+			case <-time.After(RequestTimeout):
+				// DPrintf("Request PutAppend: serverId %v, args %v, timeout", serverId, args)
 			}
 		}
-
-		time.Sleep(100 * time.Millisecond)
-		ck.leaderId = -1
 	}
 }
 

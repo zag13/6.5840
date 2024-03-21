@@ -54,6 +54,7 @@ const (
 type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
+	CommandTerm  int
 	CommandIndex int
 
 	// For 2D:
@@ -392,11 +393,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			applyMsg := ApplyMsg{
 				CommandValid: true,
 				Command:      entry.Command,
+				CommandTerm:  entry.Term,
 				CommandIndex: entry.Index,
 			}
 			rf.applyCh <- applyMsg
 			rf.lastApplied = entry.Index
 			Debug(dLog, "S%d applyCh <- {%d %v}", rf.me, entry.Index, entry.Command)
+			// log.Printf("F%d applyCh <- {%d %v} L%d", rf.me, entry.Index, entry.Command, len(rf.log))
 		}
 	}
 
@@ -444,11 +447,13 @@ func (rf *Raft) handleAppendEntriesResponse(server int, args *AppendEntriesArgs,
 					applyMsg := ApplyMsg{
 						CommandValid: true,
 						Command:      entry.Command,
+						CommandTerm:  entry.Term,
 						CommandIndex: entry.Index,
 					}
 					rf.applyCh <- applyMsg
 					rf.lastApplied = entry.Index
 					Debug(dLeader, "S%d applyCh <- {%d %v}", rf.me, applyMsg.CommandIndex, applyMsg.Command)
+					// log.Printf("L%d applyCh <- {%d %v}", rf.me, applyMsg.CommandIndex, applyMsg.Command)
 				}
 			}
 		} else {
@@ -656,6 +661,7 @@ func (rf *Raft) becomeLeader() {
 	rf.matchIndex = make([]int, len(rf.peers))
 
 	Debug(dLeader, "S%d become Leader at T%d L%d", rf.me, rf.currentTerm, len(rf.log))
+	// log.Printf("S%d become Leader at T%d L%d", rf.me, rf.currentTerm, len(rf.log))
 
 	go rf.sendHeartbeats()
 }
@@ -717,6 +723,7 @@ func (rf *Raft) sendHeartbeats() {
 				go func(server int, args *AppendEntriesArgs) {
 					Debug(dLeader, "S%d -> S%d heartbeat, PL(I%d, T%d), %d ",
 						rf.me, server, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries))
+					// log.Printf("S%d -> S%d heartbeat, PL(I%d, T%d), %d ", rf.me, server, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries))
 					reply := &AppendEntriesReply{}
 					if rf.sendAppendEntries(server, args, reply) {
 						rf.handleAppendEntriesResponse(server, args, reply)

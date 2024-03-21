@@ -4,13 +4,17 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"6.5840/labgob"
 	"6.5840/labrpc"
 	"6.5840/raft"
 )
 
-const Debug = false
+const (
+	Debug          = false
+	RequestTimeout = 1 * time.Second
+)
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -40,17 +44,32 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	db                map[string]string // key-value database
-	applyCond         *sync.Cond
-	lastAppliedIndex  int             // last applied index
-	lastAppliedTerm   int             // last applied term
-	clientLastRequest map[int64]int64 // key: clientId, value: last request id
+	db                   map[string]string // key-value database
+	applyCond            *sync.Cond
+	lastAppliedIndex     int                         // last applied index
+	lastAppliedTerm      int                         // last applied term
+	clientLatestRequests map[int64]map[int64]Request // latest client requests
+}
+
+type Request struct {
+	RequestId int64
+	Value     string
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 	if _, isLeader := kv.rf.GetState(); !isLeader {
 		reply.Err = ErrWrongLeader
+		return
+	}
+
+	kv.applyCond.L.Lock()
+	req, ok := kv.clientLatestRequests[args.ClientId][args.RequestId]
+	kv.applyCond.L.Unlock()
+
+	if ok {
+		reply.Err = OK
+		reply.Value = req.Value
 		return
 	}
 
@@ -67,6 +86,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
+	// DPrintf("server %d start: %v index: %v term: %v", kv.me, op, index, term)
 
 	success := kv.waitApply(index, term)
 	if !success {
@@ -77,14 +97,9 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.applyCond.L.Lock()
 	defer kv.applyCond.L.Unlock()
 
-	val, ok := kv.db[args.Key]
-	if !ok {
-		reply.Err = ErrNoKey
-		return
-	}
-
+	req = kv.clientLatestRequests[args.ClientId][args.RequestId]
 	reply.Err = OK
-	reply.Value = val
+	reply.Value = req.Value
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -95,13 +110,13 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 
 	kv.applyCond.L.Lock()
-	lastReqId, ok := kv.clientLastRequest[args.ClientId]
-	if ok && args.RequestId <= lastReqId {
-		kv.applyCond.L.Unlock()
+	_, ok := kv.clientLatestRequests[args.ClientId][args.RequestId]
+	kv.applyCond.L.Unlock()
+
+	if ok {
 		reply.Err = OK
 		return
 	}
-	kv.applyCond.L.Unlock()
 
 	op := Op{
 		Type:      args.Op,
@@ -135,8 +150,7 @@ func (kv *KVServer) waitApply(index int, term int) bool {
 		kv.applyCond.Wait()
 	}
 
-	b := kv.lastAppliedIndex >= index && kv.lastAppliedTerm == term
-	return b
+	return kv.lastAppliedIndex >= index && kv.lastAppliedTerm == term
 }
 
 // the tester calls Kill() when a KVServer instance won't
@@ -184,7 +198,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.applyCond = sync.NewCond(&kv.mu)
 	kv.lastAppliedIndex = 0
 	kv.lastAppliedTerm = 0
-	kv.clientLastRequest = make(map[int64]int64)
+	kv.clientLatestRequests = make(map[int64]map[int64]Request)
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
@@ -201,17 +215,36 @@ func (kv *KVServer) applyListener() {
 		kv.applyCond.L.Lock()
 		if msg.CommandValid && msg.CommandIndex > kv.lastAppliedIndex {
 			op := msg.Command.(Op)
-			switch op.Type {
-			case "Put":
-				kv.db[op.Key] = op.Value
-			case "Append":
-				kv.db[op.Key] += op.Value
+			if _, ok := kv.clientLatestRequests[op.ClientId]; !ok {
+				kv.clientLatestRequests[op.ClientId] = make(map[int64]Request)
+			}
+			if _, ok := kv.clientLatestRequests[op.ClientId][op.RequestId]; !ok {
+				request := Request{}
+				switch op.Type {
+				case "Get":
+					request = Request{
+						RequestId: op.RequestId,
+						Value:     kv.db[op.Key],
+					}
+				case "Put":
+					kv.db[op.Key] = op.Value
+					request = Request{
+						RequestId: op.RequestId,
+						Value:     "",
+					}
+				case "Append":
+					kv.db[op.Key] += op.Value
+					request = Request{
+						RequestId: op.RequestId,
+						Value:     "",
+					}
+				}
+				kv.clientLatestRequests[op.ClientId][op.RequestId] = request
 			}
 
-			kv.applyCond.Broadcast()
 			kv.lastAppliedIndex = msg.CommandIndex
 			kv.lastAppliedTerm = msg.CommandTerm
-			kv.clientLastRequest[op.ClientId] = op.RequestId
+			kv.applyCond.Broadcast()
 		}
 		kv.applyCond.L.Unlock()
 	}
