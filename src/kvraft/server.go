@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"bytes"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 const (
 	Debug          = false
 	RequestTimeout = 1 * time.Second
+	PadSize        = 10
 )
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
@@ -203,13 +205,18 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
+	kv.readPersist(persister.ReadSnapshot())
 	go kv.applyListener()
+	go kv.cronPersist(persister)
 
 	return kv
 }
 
 func (kv *KVServer) applyListener() {
 	for msg := range kv.applyCh {
+		if !msg.CommandValid && msg.SnapshotValid {
+			kv.readPersist(msg.Snapshot)
+		}
 		DPrintf("server %d receive apply msg: %v", kv.me, msg)
 		kv.applyCond.L.Lock()
 		if msg.CommandValid && msg.CommandIndex > kv.lastAppliedIndex {
@@ -245,4 +252,53 @@ func (kv *KVServer) applyListener() {
 		}
 		kv.applyCond.L.Unlock()
 	}
+}
+
+func (kv *KVServer) cronPersist(persister *raft.Persister) {
+	for !kv.killed() {
+		if kv.maxraftstate != -1 && persister.RaftStateSize() > (kv.maxraftstate+PadSize) {
+			kv.applyCond.L.Lock()
+			w := new(bytes.Buffer)
+			e := labgob.NewEncoder(w)
+			e.Encode(kv.db)
+			e.Encode(kv.lastAppliedIndex)
+			e.Encode(kv.lastAppliedTerm)
+			e.Encode(kv.clientLastRequest)
+			snapshot := w.Bytes()
+			kv.rf.Snapshot(kv.lastAppliedIndex, snapshot)
+			kv.applyCond.L.Unlock()
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func (kv *KVServer) readPersist(data []byte) {
+	if data == nil || len(data) < 1 {
+		return
+	}
+
+	kv.applyCond.L.Lock()
+	defer kv.applyCond.L.Unlock()
+
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+
+	var db map[string]string
+	var lastAppliedIndex int
+	var lastAppliedTerm int
+	var clientLastRequest map[int64]Request
+	if d.Decode(&db) != nil ||
+		d.Decode(&lastAppliedIndex) != nil ||
+		d.Decode(&lastAppliedTerm) != nil ||
+		d.Decode(&clientLastRequest) != nil {
+		DPrintf("S%d read persist ERROR", kv.me)
+		return
+	} else {
+		kv.db = db
+		kv.lastAppliedIndex = lastAppliedIndex
+		kv.lastAppliedTerm = lastAppliedTerm
+		kv.clientLastRequest = clientLastRequest
+	}
+	DPrintf("S%d read persist LAI %d LAT %d DB %v",
+		kv.me, kv.lastAppliedIndex, kv.lastAppliedTerm, kv.db)
 }
