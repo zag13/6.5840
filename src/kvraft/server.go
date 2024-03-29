@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	Debug          = false
-	RequestTimeout = 1 * time.Second
-	PadSize        = 10
+	Debug             = false
+	RequestTimeout    = 1 * time.Second
+	PadSize           = 10
+	PersistTimePeriod = 10 * time.Millisecond
 )
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
@@ -217,13 +218,14 @@ func (kv *KVServer) applyListener() {
 		if !msg.CommandValid && msg.SnapshotValid {
 			kv.readPersist(msg.Snapshot)
 		}
-		DPrintf("server %d receive apply msg: %v", kv.me, msg)
+
 		kv.applyCond.L.Lock()
 		if msg.CommandValid && msg.CommandIndex > kv.lastAppliedIndex {
+			DPrintf("server %d receive apply msg: %v", kv.me, msg)
 			op := msg.Command.(Op)
 			req, ok := kv.clientLastRequest[op.ClientId]
 			if !(ok && req.RequestId == op.RequestId) {
-				request := Request{}
+				request := Request{RequestId: op.RequestId}
 				switch op.Type {
 				case "Get":
 					request = Request{
@@ -232,16 +234,8 @@ func (kv *KVServer) applyListener() {
 					}
 				case "Put":
 					kv.db[op.Key] = op.Value
-					request = Request{
-						RequestId: op.RequestId,
-						Value:     "",
-					}
 				case "Append":
 					kv.db[op.Key] += op.Value
-					request = Request{
-						RequestId: op.RequestId,
-						Value:     "",
-					}
 				}
 				kv.clientLastRequest[op.ClientId] = request
 			}
@@ -268,7 +262,7 @@ func (kv *KVServer) cronPersist(persister *raft.Persister) {
 			kv.rf.Snapshot(kv.lastAppliedIndex, snapshot)
 			kv.applyCond.L.Unlock()
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(PersistTimePeriod)
 	}
 }
 

@@ -198,6 +198,9 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 		return
 	}
 
+	sc.applyCond.L.Lock()
+	defer sc.applyCond.L.Unlock()
+
 	reply.Err = OK
 	if args.Num == -1 || args.Num >= len(sc.configs) {
 		reply.Config = sc.configs[len(sc.configs)-1]
